@@ -27,6 +27,17 @@ function saveData(data) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
+// ===== CORS - CHO PHÉP TRUY CẬP TỪ MỌI NƠI =====
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
 // ===== LOG MIDDLEWARE =====
 app.use((req, res, next) => {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -35,21 +46,27 @@ app.use((req, res, next) => {
     next();
 });
 
+// ===== ADMIN KEY MỚI (BẢO MẬT) =====
+const ADMIN_KEY = 'ADMIN_2026_Ka1t0_S3cr3t_X9zW8yV7uT6rQ5pO4nM3';
+
+// ===== MIDDLEWARE XÁC THỰC ADMIN =====
+function verifyAdmin(req, res, next) {
+    const adminKey = req.body.adminKey || req.query.adminKey || req.headers['x-admin-key'];
+    if (adminKey !== ADMIN_KEY) {
+        return res.status(403).json({
+            success: false,
+            message: '🔒 Không có quyền truy cập!'
+        });
+    }
+    next();
+}
+
 // ===== API GỐC =====
 app.get('/', (req, res) => {
     res.json({
         name: 'Tool Management Server',
         version: '3.0.0',
-        status: 'running',
-        endpoints: {
-            health: '/api/health',
-            'verify-key': '/verify-key (POST)',
-            'use-key': '/use-key (POST)',
-            createKey: '/api/admin/create-key (POST)',
-            listKeys: '/api/admin/list-keys (GET)',
-            disableKey: '/api/admin/disable-key (POST)',
-            logs: '/api/admin/logs (GET)'
-        }
+        status: 'running'
     });
 });
 
@@ -72,9 +89,6 @@ app.post('/verify-key', (req, res) => {
     const data = initData();
     const clientIp = req.clientIp;
     
-    console.log(`[AUTH] Key: ${key}, HWID: ${hwid}`);
-    
-    // Kiểm tra key tồn tại
     if (!data.keys[key]) {
         data.logs.push({
             timestamp: new Date().toISOString(),
@@ -93,7 +107,6 @@ app.post('/verify-key', (req, res) => {
     
     const keyData = data.keys[key];
     
-    // Kiểm tra key active
     if (!keyData.active) {
         data.logs.push({
             timestamp: new Date().toISOString(),
@@ -110,7 +123,6 @@ app.post('/verify-key', (req, res) => {
         });
     }
     
-    // Kiểm tra hết hạn
     if (new Date(keyData.expiry) < new Date()) {
         data.logs.push({
             timestamp: new Date().toISOString(),
@@ -127,7 +139,6 @@ app.post('/verify-key', (req, res) => {
         });
     }
     
-    // Kiểm tra số lượt dùng
     if (keyData.used >= keyData.maxUses) {
         data.logs.push({
             timestamp: new Date().toISOString(),
@@ -144,7 +155,8 @@ app.post('/verify-key', (req, res) => {
         });
     }
     
-    // Tạo session token
+    keyData.used++;
+    
     const token = crypto.randomBytes(32).toString('hex');
     data.sessions[token] = {
         key: key,
@@ -179,13 +191,11 @@ app.post('/verify-key', (req, res) => {
     });
 });
 
-// ===== API TRỪ LƯỢT DÙNG (TOOL GỌI) =====
+// ===== API TRỪ LƯỢT DÙNG =====
 app.post('/use-key', (req, res) => {
     const { key, hwid } = req.body;
     const data = initData();
     const clientIp = req.clientIp;
-    
-    console.log(`[USE] Key: ${key}, HWID: ${hwid}`);
     
     if (!data.keys[key]) {
         return res.json({ success: false, message: 'Key không tồn tại!' });
@@ -193,7 +203,6 @@ app.post('/use-key', (req, res) => {
     
     const keyData = data.keys[key];
     
-    // Kiểm tra còn lượt không
     if (keyData.used >= keyData.maxUses) {
         return res.json({
             success: false,
@@ -203,7 +212,6 @@ app.post('/use-key', (req, res) => {
         });
     }
     
-    // Tăng số lượt dùng
     keyData.used++;
     
     data.logs.push({
@@ -225,16 +233,13 @@ app.post('/use-key', (req, res) => {
     });
 });
 
-// ===== API ADMIN - TẠO KEY =====
-app.post('/api/admin/create-key', (req, res) => {
-    const { adminKey, type, expiry, maxUses, note } = req.body;
-    
-    if (adminKey !== 'ADMIN_2026_SECRET') {
-        return res.status(403).json({
-            success: false,
-            message: 'Không có quyền!'
-        });
-    }
+// ============================================================
+// API ADMIN - CÓ XÁC THỰC ADMIN KEY
+// ============================================================
+
+// ===== TẠO KEY =====
+app.post('/api/admin/create-key', verifyAdmin, (req, res) => {
+    const { type, expiry, maxUses, note } = req.body;
     
     const data = initData();
     const newKey = `KEY_${Date.now()}_${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
@@ -268,17 +273,8 @@ app.post('/api/admin/create-key', (req, res) => {
     });
 });
 
-// ===== API ADMIN - XEM DANH SÁCH KEY =====
-app.get('/api/admin/list-keys', (req, res) => {
-    const { adminKey } = req.query;
-    
-    if (adminKey !== 'ADMIN_2026_SECRET') {
-        return res.status(403).json({
-            success: false,
-            message: 'Không có quyền!'
-        });
-    }
-    
+// ===== XEM DANH SÁCH KEY =====
+app.get('/api/admin/list-keys', verifyAdmin, (req, res) => {
     const data = initData();
     const keyList = Object.keys(data.keys).map(k => ({
         key: k,
@@ -294,18 +290,40 @@ app.get('/api/admin/list-keys', (req, res) => {
     });
 });
 
-// ===== API ADMIN - VÔ HIỆU HÓA KEY =====
-app.post('/api/admin/disable-key', (req, res) => {
-    const { adminKey, key } = req.body;
+// ===== XÓA KEY =====
+app.post('/api/admin/delete-key', verifyAdmin, (req, res) => {
+    const { key } = req.body;
+    const data = initData();
     
-    if (adminKey !== 'ADMIN_2026_SECRET') {
-        return res.status(403).json({
+    if (!data.keys[key]) {
+        return res.json({
             success: false,
-            message: 'Không có quyền!'
+            message: 'Key không tồn tại!'
         });
     }
     
+    delete data.keys[key];
+    data.logs.push({
+        timestamp: new Date().toISOString(),
+        key: key,
+        action: 'KEY_DELETED',
+        status: 'SUCCESS',
+        ip: req.clientIp,
+        message: `Đã xóa key: ${key}`
+    });
+    saveData(data);
+    
+    res.json({
+        success: true,
+        message: `Đã xóa key: ${key}`
+    });
+});
+
+// ===== VÔ HIỆU HÓA KEY =====
+app.post('/api/admin/disable-key', verifyAdmin, (req, res) => {
+    const { key } = req.body;
     const data = initData();
+    
     if (!data.keys[key]) {
         return res.json({
             success: false,
@@ -314,7 +332,6 @@ app.post('/api/admin/disable-key', (req, res) => {
     }
     
     data.keys[key].active = false;
-    
     data.logs.push({
         timestamp: new Date().toISOString(),
         key: key,
@@ -323,7 +340,6 @@ app.post('/api/admin/disable-key', (req, res) => {
         ip: req.clientIp,
         message: `Đã vô hiệu hóa key: ${key}`
     });
-    
     saveData(data);
     
     res.json({
@@ -332,17 +348,38 @@ app.post('/api/admin/disable-key', (req, res) => {
     });
 });
 
-// ===== API ADMIN - XEM LOG =====
-app.get('/api/admin/logs', (req, res) => {
-    const { adminKey, limit = 50 } = req.query;
+// ===== KÍCH HOẠT KEY =====
+app.post('/api/admin/enable-key', verifyAdmin, (req, res) => {
+    const { key } = req.body;
+    const data = initData();
     
-    if (adminKey !== 'ADMIN_2026_SECRET') {
-        return res.status(403).json({
+    if (!data.keys[key]) {
+        return res.json({
             success: false,
-            message: 'Không có quyền!'
+            message: 'Key không tồn tại!'
         });
     }
     
+    data.keys[key].active = true;
+    data.logs.push({
+        timestamp: new Date().toISOString(),
+        key: key,
+        action: 'KEY_ENABLED',
+        status: 'SUCCESS',
+        ip: req.clientIp,
+        message: `Đã kích hoạt lại key: ${key}`
+    });
+    saveData(data);
+    
+    res.json({
+        success: true,
+        message: `Đã kích hoạt lại key: ${key}`
+    });
+});
+
+// ===== XEM LOG =====
+app.get('/api/admin/logs', verifyAdmin, (req, res) => {
+    const { limit = 50 } = req.query;
     const data = initData();
     const logs = data.logs.slice(-parseInt(limit)).reverse();
     
@@ -353,11 +390,65 @@ app.get('/api/admin/logs', (req, res) => {
     });
 });
 
-// ===== KHỞI ĐỘNG SERVER =====
+// ===== XEM SESSIONS =====
+app.get('/api/admin/sessions', verifyAdmin, (req, res) => {
+    const data = initData();
+    const sessions = Object.keys(data.sessions).map(token => ({
+        token: token.substring(0, 16) + '...',
+        ...data.sessions[token]
+    }));
+    
+    res.json({
+        success: true,
+        total: sessions.length,
+        sessions: sessions
+    });
+});
+
+// ===== NGẮT KẾT NỐI =====
+app.post('/api/admin/disconnect', verifyAdmin, (req, res) => {
+    const { token, key } = req.body;
+    const data = initData();
+    let disconnected = [];
+    
+    if (token && data.sessions[token]) {
+        delete data.sessions[token];
+        disconnected.push(token.substring(0, 16) + '...');
+    } else if (key) {
+        const tokens = Object.keys(data.sessions).filter(t => data.sessions[t].key === key);
+        tokens.forEach(t => {
+            delete data.sessions[t];
+            disconnected.push(t.substring(0, 16) + '...');
+        });
+    } else {
+        const tokens = Object.keys(data.sessions);
+        tokens.forEach(t => {
+            delete data.sessions[t];
+            disconnected.push(t.substring(0, 16) + '...');
+        });
+    }
+    
+    data.logs.push({
+        timestamp: new Date().toISOString(),
+        key: key || 'ALL',
+        action: 'DISCONNECT',
+        status: 'SUCCESS',
+        ip: req.clientIp,
+        message: `Đã ngắt kết nối ${disconnected.length} session(s)`
+    });
+    saveData(data);
+    
+    res.json({
+        success: true,
+        message: `Đã ngắt kết nối ${disconnected.length} session(s)`,
+        disconnected: disconnected
+    });
+});
+
+// ===== KHỞI ĐỘNG =====
 app.listen(PORT, () => {
     initData();
     console.log(`✅ Server đang chạy tại port ${PORT}`);
-    console.log(`📁 Dữ liệu lưu tại: ${DATA_FILE}`);
-    console.log(`🔑 Admin Key: ADMIN_2026_SECRET`);
-    console.log(`📋 Key mẫu: TEST_2026`);
+    console.log(`🔑 Admin Key: ${ADMIN_KEY}`);
+    console.log(`📁 Dữ liệu: ${DATA_FILE}`);
 });
