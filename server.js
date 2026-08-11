@@ -73,7 +73,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // ============================================================
-// API XÁC THỰC KEY (CHO TOOL VỎ BỌC)
+// API XÁC THỰC KEY
 // ============================================================
 app.post('/verify-key', (req, res) => {
     const { key, hwid } = req.body;
@@ -134,77 +134,12 @@ app.post('/verify-key', (req, res) => {
 });
 
 // ============================================================
-// API QUẢN LÝ MÃ HÓA TOOL
-// ============================================================
-app.post('/api/save-encrypt-key', verifyAdmin, (req, res) => {
-    const { key, iv, salt, encrypted } = req.body;
-    
-    if (!key || !iv || !encrypted) {
-        return res.json({ success: false, message: 'Thiếu dữ liệu!' });
-    }
-    
-    global.encryptKey = key;
-    global.encryptIv = iv;
-    global.encryptSalt = salt;
-    global.encryptedCode = encrypted;
-    global.encryptTimestamp = Date.now();
-    
-    console.log(`[ENCRYPT] Đã lưu key mã hóa mới!`);
-    res.json({ success: true, message: 'Đã lưu key mã hóa!' });
-});
-
-app.post('/api/get-decrypt-key', (req, res) => {
-    const { hwid } = req.body;
-    
-    if (!hwid) {
-        return res.json({ success: false, message: 'Thiếu HWID xác thực!' });
-    }
-    
-    if (!global.encryptKey) {
-        return res.json({ success: false, message: 'Chưa có key mã hóa!' });
-    }
-    
-    const data = initData();
-    let authorized = false;
-    for (let key in data.keys) {
-        if (data.keys[key].hwid === hwid) {
-            authorized = true;
-            break;
-        }
-    }
-    
-    if (!authorized) {
-        return res.json({ success: false, message: '🔒 Thiết bị chưa được cấp phép!' });
-    }
-    
-    res.json({
-        success: true,
-        key: global.encryptKey,
-        iv: global.encryptIv,
-        encrypted: global.encryptedCode,
-        salt: global.encryptSalt
-    });
-});
-
-app.post('/api/verify-hash', (req, res) => {
-    const { hash } = req.body;
-    
-    if (!global.fileHash) {
-        global.fileHash = hash;
-        return res.json({ valid: true });
-    }
-    
-    res.json({ valid: global.fileHash === hash });
-});
-
-// ============================================================
 // API HACK 30M GOLD - TOÀN BỘ LOGIC HACK TRÊN SERVER
 // ============================================================
 app.post('/api/hack-gold', async (req, res) => {
     try {
         const { key, platform, uniqId, hostId, gichapo, times } = req.body;
         
-        // Kiểm tra key hợp lệ
         const data = initData();
         if (!data.keys[key] || !data.keys[key].active) {
             return res.json({ success: false, message: 'Key không hợp lệ hoặc đã hết hạn!' });
@@ -216,7 +151,7 @@ app.post('/api/hack-gold', async (req, res) => {
         }
         
         // ============================================================
-        // TOÀN BỘ LOGIC HACK 30M GOLD (GIỐNG HỆT TOOL GỐC)
+        // LOGIC HACK 30M GOLD - GIỐNG HỆT TOOL GỐC 100%
         // ============================================================
         const K_AES2 = Buffer.from("gksekfidjrqjfwk1", "utf8");
         const I_AES2 = Buffer.from("towerdefense_amo", "utf8");
@@ -273,7 +208,7 @@ app.post('/api/hack-gold', async (req, res) => {
             return null;
         }
         
-        // ===== LẤY DATA USER (GIỐNG TOOL GỐC) =====
+        // ===== FETCH USER DATA - GIỐNG TOOL GỐC =====
         const isViet = (platform === 'AMO' || platform === 'SS');
         const gicDefault = isViet ? "선택된서버:베트남서버 ping:67ms" : "선택된서버:한국서버 ping:205ms";
         
@@ -296,7 +231,7 @@ app.post('/api/hack-gold', async (req, res) => {
         const userName = normal.USER_NAME || '???';
         let gold = rubydiagold.GOLD || 0;
         
-        // ===== HACK 30M GOLD (GIỐNG TOOL GỐC) =====
+        // ===== HACK 30M GOLD - GIỐNG TOOL GỐC =====
         async function hackGold30M(platform, uniqId, hostId, gichapo) {
             const payload = {
                 SGS: true,
@@ -334,11 +269,9 @@ app.post('/api/hack-gold', async (req, res) => {
             }
         }
         
-        // Trừ lượt key
         keyData.used += times;
         saveData(data);
         
-        // Trả kết quả về tool
         res.json({
             success: true,
             userName: userName,
