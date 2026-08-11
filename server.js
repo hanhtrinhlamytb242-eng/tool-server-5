@@ -29,7 +29,9 @@ function saveData(data) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// ===== MIDDLEWARE =====
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -40,7 +42,9 @@ app.use((req, res, next) => {
     next();
 });
 
-// ===== XÁC THỰC ADMIN =====
+// ============================================================
+// XÁC THỰC ADMIN
+// ============================================================
 function verifyAdmin(req, res, next) {
     const adminKey = req.body.adminKey || req.query.adminKey || req.headers['x-admin-key'];
     if (adminKey !== ADMIN_KEY) {
@@ -461,4 +465,5 @@ app.listen(PORT, () => {
     console.log(`🔑 Admin Key: ${ADMIN_KEY}`);
     console.log(`📁 Dữ liệu: ${DATA_FILE}`);
     console.log(`📌 API hack 30M Gold đã sẵn sàng!`);
+    console.log(`📌 API mã hóa tool đã sẵn sàng!`);
 });
