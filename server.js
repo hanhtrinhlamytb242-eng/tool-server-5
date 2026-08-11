@@ -130,6 +130,75 @@ app.post('/verify-key', (req, res) => {
 });
 
 // ============================================================
+// API QUẢN LÝ MÃ HÓA TOOL
+// ============================================================
+
+// Lưu key mã hóa (chỉ admin)
+app.post('/api/save-encrypt-key', verifyAdmin, (req, res) => {
+    const { key, iv, salt, encrypted } = req.body;
+    
+    if (!key || !iv || !encrypted) {
+        return res.json({ success: false, message: 'Thiếu dữ liệu!' });
+    }
+    
+    global.encryptKey = key;
+    global.encryptIv = iv;
+    global.encryptSalt = salt;
+    global.encryptedCode = encrypted;
+    global.encryptTimestamp = Date.now();
+    
+    console.log(`[ENCRYPT] Đã lưu key mã hóa mới!`);
+    res.json({ success: true, message: 'Đã lưu key mã hóa!' });
+});
+
+// Lấy key giải mã (có xác thực HWID)
+app.post('/api/get-decrypt-key', (req, res) => {
+    const { hwid } = req.body;
+    
+    if (!hwid) {
+        return res.json({ success: false, message: 'Thiếu HWID xác thực!' });
+    }
+    
+    if (!global.encryptKey) {
+        return res.json({ success: false, message: 'Chưa có key mã hóa!' });
+    }
+    
+    // Kiểm tra HWID có trong danh sách key không
+    const data = initData();
+    let authorized = false;
+    for (let key in data.keys) {
+        if (data.keys[key].hwid === hwid) {
+            authorized = true;
+            break;
+        }
+    }
+    
+    if (!authorized) {
+        return res.json({ success: false, message: '🔒 Thiết bị chưa được cấp phép!' });
+    }
+    
+    res.json({
+        success: true,
+        key: global.encryptKey,
+        iv: global.encryptIv,
+        encrypted: global.encryptedCode,
+        salt: global.encryptSalt
+    });
+});
+
+// Kiểm tra hash file
+app.post('/api/verify-hash', (req, res) => {
+    const { hash } = req.body;
+    
+    if (!global.fileHash) {
+        global.fileHash = hash;
+        return res.json({ valid: true });
+    }
+    
+    res.json({ valid: global.fileHash === hash });
+});
+
+// ============================================================
 // API HACK 30M GOLD (XỬ LÝ TRÊN SERVER)
 // ============================================================
 app.post('/api/hack-gold', async (req, res) => {
