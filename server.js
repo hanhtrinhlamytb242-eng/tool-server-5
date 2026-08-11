@@ -134,12 +134,13 @@ app.post('/verify-key', (req, res) => {
 });
 
 // ============================================================
-// API HACK 30M GOLD - TOÀN BỘ LOGIC HACK TRÊN SERVER
+// API HACK 30M GOLD - FULL LOGIC NHƯ TOOL GỐC
 // ============================================================
 app.post('/api/hack-gold', async (req, res) => {
     try {
         const { key, platform, uniqId, hostId, gichapo, times } = req.body;
         
+        // Kiểm tra key
         const data = initData();
         if (!data.keys[key] || !data.keys[key].active) {
             return res.json({ success: false, message: 'Key không hợp lệ hoặc đã hết hạn!' });
@@ -151,7 +152,7 @@ app.post('/api/hack-gold', async (req, res) => {
         }
         
         // ============================================================
-        // LOGIC HACK 30M GOLD - GIỐNG HỆT TOOL GỐC 100%
+        // TOÀN BỘ LOGIC GỐC CỦA TOOL hack30mvang.js
         // ============================================================
         const K_AES2 = Buffer.from("gksekfidjrqjfwk1", "utf8");
         const I_AES2 = Buffer.from("towerdefense_amo", "utf8");
@@ -208,30 +209,57 @@ app.post('/api/hack-gold', async (req, res) => {
             return null;
         }
         
-        // ===== FETCH USER DATA - GIỐNG TOOL GỐC =====
+        // ===== FETCH USER DATA - GIỐNG HỆT TOOL GỐC =====
         const isViet = (platform === 'AMO' || platform === 'SS');
         const gicDefault = isViet ? "선택된서버:베트남서버 ping:67ms" : "선택된서버:한국서버 ping:205ms";
         
         const getUrl = `http://211.253.26.47:8093/TOWERDEFENCE_${platform}/get_user_data_all_AES2.php`;
         const getPayload = {
-            UNIQ_ID: uniqId, HOST_ID: hostId,
-            MOBILE_CONNECT: "", ANDROID_AD: "",
-            GICHAPO: gicDefault, LOCAL_KEY: null
+            UNIQ_ID: uniqId,
+            HOST_ID: hostId,
+            MOBILE_CONNECT: "",
+            ANDROID_AD: "",
+            GICHAPO: gicDefault,
+            LOCAL_KEY: null
         };
-        if (platform === 'ATV' || platform === 'LG') getPayload.MODEL_NAME = "BeyondTV";
+        if (platform === 'ATV' || platform === 'LG') {
+            getPayload.MODEL_NAME = "BeyondTV";
+        }
+
+        console.log(`[DEBUG] GET URL: ${getUrl}`);
+        console.log(`[DEBUG] GET Payload:`, getPayload);
+
+        const postData = `DATA=${encodeURIComponent(encryptAES2(getPayload))}`;
+        const res = await postRequest(getUrl, postData);
         
-        const res = await postRequest(getUrl, `DATA=${encodeURIComponent(encryptAES2(getPayload))}`);
+        console.log(`[DEBUG] GET Response raw (first 200 chars): ${res.substring(0, 200)}...`);
+
         const dec = decryptAES2(res);
-        if (!dec) throw new Error('Không giải mã được dữ liệu GET');
+        console.log(`[DEBUG] GET Response decrypted (first 300 chars): ${dec ? dec.substring(0, 300) : 'NULL'}`);
+
+        if (!dec) {
+            console.log(`[DEBUG] Failed to decrypt. Full raw: ${res}`);
+            throw new Error('Không giải mã được dữ liệu GET');
+        }
+
         const userData = JSON.parse(dec);
+        console.log(`[DEBUG] Parsed data:`, JSON.stringify(userData).substring(0, 300));
+
         const gichapo_found = findGichapo(userData);
+        if (!gichapo_found) {
+            throw new Error('Không tìm thấy GICHAPO trong dữ liệu');
+        }
+        console.log(`[DEBUG] Found GICHAPO: ${gichapo_found}`);
+
         const val = userData.VALUE || {};
         const normal = val.normal?.value || {};
         const rubydiagold = val.rubydiagold?.value || {};
         const userName = normal.USER_NAME || '???';
         let gold = rubydiagold.GOLD || 0;
         
-        // ===== HACK 30M GOLD - GIỐNG TOOL GỐC =====
+        console.log(`[DEBUG] User: ${userName}, Gold: ${gold}`);
+
+        // ===== HACK 30M GOLD - GIỐNG HỆT TOOL GỐC =====
         async function hackGold30M(platform, uniqId, hostId, gichapo) {
             const payload = {
                 SGS: true,
@@ -261,6 +289,8 @@ app.post('/api/hack-gold', async (req, res) => {
         // Chạy hack
         let successCount = 0, totalGoldReceived = 0;
         const finalGichapo = gichapo || gichapo_found;
+        console.log(`[DEBUG] Using GICHAPO: ${finalGichapo}`);
+        
         for (let i = 0; i < times; i++) {
             const result = await hackGold30M(platform, uniqId, hostId, finalGichapo);
             if (result && result.RESULT === "OK") {
@@ -269,6 +299,7 @@ app.post('/api/hack-gold', async (req, res) => {
             }
         }
         
+        // Trừ lượt key
         keyData.used += times;
         saveData(data);
         
@@ -279,10 +310,12 @@ app.post('/api/hack-gold', async (req, res) => {
             successCount: successCount,
             totalGoldReceived: totalGoldReceived,
             remainingUses: keyData.maxUses - keyData.used,
+            gichapoUsed: finalGichapo,
             message: `✅ Hack ${successCount}/${times} lần thành công! Nhận ${totalGoldReceived.toLocaleString()} vàng`
         });
         
     } catch (error) {
+        console.log(`[ERROR] ${error.message}`);
         res.json({ success: false, message: '❌ Lỗi server: ' + error.message });
     }
 });
