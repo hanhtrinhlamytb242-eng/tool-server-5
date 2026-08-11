@@ -13,8 +13,7 @@ app.use(express.json({ limit: '10mb' }));
 const DATA_FILE = path.join(__dirname, 'data.json');
 const ADMIN_KEY = 'ADMIN_2026_Ka1t0_S3cr3t_X9zW8yV7uT6rQ5pO4nM3';
 
-// ===== RSA KEY (SINH 1 LẦN, GIỮ BÍ MẬT) =====
-// Nếu chưa có, server sẽ tự tạo
+// ===== RSA KEY =====
 const RSA_PRIVATE_FILE = path.join(__dirname, 'rsa_private.pem');
 const RSA_PUBLIC_FILE = path.join(__dirname, 'rsa_public.pem');
 
@@ -43,7 +42,7 @@ const RSA = generateRSAKeys();
 // ============================================================
 function initData() {
     if (!fs.existsSync(DATA_FILE)) {
-        const defaultData = { keys: {}, logs: [], sessions: {} };
+        const defaultData = { keys: {}, logs: {}, sessions: {} };
         fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
     }
     return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
@@ -92,65 +91,181 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// ===== LẤY PUBLIC KEY (CHO TOOL) =====
 app.get('/api/public-key', (req, res) => {
     res.json({ success: true, publicKey: RSA.publicKey });
 });
 
-// ===== API XÁC THỰC KEY (CÓ MÃ HÓA RSA) =====
+// ============================================================
+// API CŨ (HỖ TRỢ TOOL KHÔNG RSA) - THÊM MỚI
+// ============================================================
+app.post('/verify-key', (req, res) => {
+    const { key, hwid } = req.body;
+    const data = initData();
+    const clientIp = req.clientIp;
+    
+    console.log(`[VERIFY] Key: ${key}, HWID: ${hwid}`);
+    
+    // Kiểm tra key tồn tại
+    if (!data.keys[key]) {
+        data.logs[key] = data.logs[key] || [];
+        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_NOT_FOUND', ip: clientIp });
+        saveData(data);
+        return res.json({ success: false, message: 'Key không tồn tại!' });
+    }
+    
+    const keyData = data.keys[key];
+    
+    // Kiểm tra key active
+    if (!keyData.active) {
+        data.logs[key] = data.logs[key] || [];
+        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_DISABLED', ip: clientIp });
+        saveData(data);
+        return res.json({ success: false, message: 'Key đã bị khóa!' });
+    }
+    
+    // Kiểm tra HWID (mỗi key chỉ dùng 1 máy)
+    if (keyData.hwid && keyData.hwid !== hwid) {
+        data.logs[key] = data.logs[key] || [];
+        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'HWID_MISMATCH', ip: clientIp });
+        saveData(data);
+        return res.json({ success: false, message: '🔒 Key đã được sử dụng trên thiết bị khác!' });
+    }
+    
+    // Kiểm tra hết hạn
+    if (new Date(keyData.expiry) < new Date()) {
+        data.logs[key] = data.logs[key] || [];
+        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXPIRED', ip: clientIp });
+        saveData(data);
+        return res.json({ success: false, message: 'Key đã hết hạn!' });
+    }
+    
+    // Kiểm tra số lượt dùng
+    if (keyData.used >= keyData.maxUses) {
+        data.logs[key] = data.logs[key] || [];
+        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXHAUSTED', ip: clientIp });
+        saveData(data);
+        return res.json({ success: false, message: 'Key đã hết lượt!' });
+    }
+    
+    // Lưu HWID lần đầu
+    if (!keyData.hwid) {
+        keyData.hwid = hwid;
+    }
+    
+    // Tăng số lượt dùng
+    keyData.used++;
+    
+    // Tạo session token
+    const token = crypto.randomBytes(32).toString('hex');
+    data.sessions[token] = { key, hwid, connectedAt: new Date().toISOString(), ip: clientIp };
+    
+    // Ghi log
+    data.logs[key] = data.logs[key] || [];
+    data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_SUCCESS', status: 'SUCCESS', ip: clientIp });
+    saveData(data);
+    
+    res.json({
+        success: true,
+        message: `✅ Xác thực thành công! Còn ${keyData.maxUses - keyData.used} lượt`,
+        data: {
+            token,
+            expiresIn: 86400,
+            type: keyData.type,
+            remaining: keyData.maxUses - keyData.used,
+            total: keyData.maxUses
+        }
+    });
+});
+
+app.post('/use-key', (req, res) => {
+    const { key, hwid } = req.body;
+    const data = initData();
+    const clientIp = req.clientIp;
+    
+    console.log(`[USE] Key: ${key}, HWID: ${hwid}`);
+    
+    if (!data.keys[key]) {
+        return res.json({ success: false, message: 'Key không tồn tại!' });
+    }
+    
+    const keyData = data.keys[key];
+    
+    if (keyData.hwid && keyData.hwid !== hwid) {
+        return res.json({ success: false, message: '🔒 Sai thiết bị!' });
+    }
+    
+    if (keyData.used >= keyData.maxUses) {
+        return res.json({ success: false, message: 'Key đã hết lượt!', remaining: 0, total: keyData.maxUses });
+    }
+    
+    keyData.used++;
+    
+    data.logs[key] = data.logs[key] || [];
+    data.logs[key].push({ timestamp: new Date().toISOString(), action: 'USE_KEY', status: 'SUCCESS', ip: clientIp });
+    saveData(data);
+    
+    res.json({
+        success: true,
+        message: `Còn ${keyData.maxUses - keyData.used}/${keyData.maxUses} lượt`,
+        remaining: keyData.maxUses - keyData.used,
+        total: keyData.maxUses
+    });
+});
+
+// ============================================================
+// API RSA MỚI
+// ============================================================
 app.post('/api/secure-verify', (req, res) => {
     try {
-        // Giải mã request từ tool
         const encrypted = Buffer.from(req.body.encrypted, 'base64');
         const decrypted = crypto.privateDecrypt({
             key: RSA.privateKey,
             padding: crypto.constants.RSA_PKCS1_OAEP_PADDING
         }, encrypted);
-        const requestData = JSON.parse(decrypted.toString('utf8'));
-        
-        const { key, hwid, timestamp } = requestData;
+        const { key, hwid, timestamp } = JSON.parse(decrypted.toString('utf8'));
         const data = initData();
         const clientIp = req.clientIp;
 
-        // Kiểm tra timestamp (chống replay attack)
         if (Date.now() - timestamp > 30000) {
             return res.json({ success: false, message: '⏰ Request đã hết hạn!' });
         }
 
-        // Kiểm tra key
         if (!data.keys[key]) {
-            data.logs.push({ timestamp: new Date().toISOString(), key, action: 'VERIFY_FAILED', status: 'KEY_NOT_FOUND', ip: clientIp });
+            data.logs[key] = data.logs[key] || [];
+            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_NOT_FOUND', ip: clientIp });
             saveData(data);
             return res.json({ success: false, message: 'Key không tồn tại!' });
         }
 
         const keyData = data.keys[key];
         if (!keyData.active) {
-            data.logs.push({ timestamp: new Date().toISOString(), key, action: 'VERIFY_FAILED', status: 'KEY_DISABLED', ip: clientIp });
+            data.logs[key] = data.logs[key] || [];
+            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_DISABLED', ip: clientIp });
             saveData(data);
             return res.json({ success: false, message: 'Key đã bị khóa!' });
         }
 
-        // Kiểm tra HWID (mỗi key chỉ dùng 1 máy)
         if (keyData.hwid && keyData.hwid !== hwid) {
-            data.logs.push({ timestamp: new Date().toISOString(), key, action: 'VERIFY_FAILED', status: 'HWID_MISMATCH', ip: clientIp });
+            data.logs[key] = data.logs[key] || [];
+            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'HWID_MISMATCH', ip: clientIp });
             saveData(data);
             return res.json({ success: false, message: '🔒 Key đã được sử dụng trên thiết bị khác!' });
         }
 
         if (new Date(keyData.expiry) < new Date()) {
-            data.logs.push({ timestamp: new Date().toISOString(), key, action: 'VERIFY_FAILED', status: 'KEY_EXPIRED', ip: clientIp });
+            data.logs[key] = data.logs[key] || [];
+            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXPIRED', ip: clientIp });
             saveData(data);
             return res.json({ success: false, message: 'Key đã hết hạn!' });
         }
 
         if (keyData.used >= keyData.maxUses) {
-            data.logs.push({ timestamp: new Date().toISOString(), key, action: 'VERIFY_FAILED', status: 'KEY_EXHAUSTED', ip: clientIp });
+            data.logs[key] = data.logs[key] || [];
+            data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_FAILED', status: 'KEY_EXHAUSTED', ip: clientIp });
             saveData(data);
             return res.json({ success: false, message: 'Key đã hết lượt!' });
         }
 
-        // Lưu HWID lần đầu
         if (!keyData.hwid) {
             keyData.hwid = hwid;
         }
@@ -158,10 +273,11 @@ app.post('/api/secure-verify', (req, res) => {
         keyData.used++;
         const token = crypto.randomBytes(32).toString('hex');
         data.sessions[token] = { key, hwid, connectedAt: new Date().toISOString(), ip: clientIp };
-        data.logs.push({ timestamp: new Date().toISOString(), key, action: 'VERIFY_SUCCESS', status: 'SUCCESS', ip: clientIp });
+        
+        data.logs[key] = data.logs[key] || [];
+        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'VERIFY_SUCCESS', status: 'SUCCESS', ip: clientIp });
         saveData(data);
 
-        // Mã hóa response
         const responseData = {
             success: true,
             message: `✅ Xác thực thành công! Còn ${keyData.maxUses - keyData.used} lượt`,
@@ -179,7 +295,6 @@ app.post('/api/secure-verify', (req, res) => {
     }
 });
 
-// ===== API TRỪ LƯỢT =====
 app.post('/api/secure-use', (req, res) => {
     try {
         const encrypted = Buffer.from(req.body.encrypted, 'base64');
@@ -208,7 +323,8 @@ app.post('/api/secure-use', (req, res) => {
         }
 
         keyData.used++;
-        data.logs.push({ timestamp: new Date().toISOString(), key, action: 'USE_KEY', status: 'SUCCESS', ip: req.clientIp });
+        data.logs[key] = data.logs[key] || [];
+        data.logs[key].push({ timestamp: new Date().toISOString(), action: 'USE_KEY', status: 'SUCCESS', ip: req.clientIp });
         saveData(data);
 
         const responseData = {
@@ -236,6 +352,7 @@ app.post('/api/admin/create-key', verifyAdmin, (req, res) => {
     const { type, expiry, maxUses, note } = req.body;
     const data = initData();
     const newKey = `KEY_${Date.now()}_${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    
     data.keys[newKey] = {
         type: type || 'vip',
         expiry: expiry || '2028-12-31',
@@ -246,8 +363,11 @@ app.post('/api/admin/create-key', verifyAdmin, (req, res) => {
         createdAt: new Date().toISOString(),
         note: note || 'Key mới'
     };
-    data.logs.push({ timestamp: new Date().toISOString(), key: newKey, action: 'KEY_CREATED', status: 'SUCCESS', ip: req.clientIp });
+    
+    data.logs[newKey] = data.logs[newKey] || [];
+    data.logs[newKey].push({ timestamp: new Date().toISOString(), action: 'KEY_CREATED', status: 'SUCCESS', ip: req.clientIp });
     saveData(data);
+    
     res.json({ success: true, message: 'Tạo key thành công!', key: newKey, data: data.keys[newKey] });
 });
 
@@ -268,9 +388,21 @@ app.post('/api/admin/disable-key', verifyAdmin, (req, res) => {
     const data = initData();
     if (!data.keys[key]) return res.json({ success: false, message: 'Key không tồn tại!' });
     data.keys[key].active = false;
-    data.logs.push({ timestamp: new Date().toISOString(), key, action: 'KEY_DISABLED', status: 'SUCCESS', ip: req.clientIp });
+    data.logs[key] = data.logs[key] || [];
+    data.logs[key].push({ timestamp: new Date().toISOString(), action: 'KEY_DISABLED', status: 'SUCCESS', ip: req.clientIp });
     saveData(data);
     res.json({ success: true, message: `Đã khóa key: ${key}` });
+});
+
+app.post('/api/admin/enable-key', verifyAdmin, (req, res) => {
+    const { key } = req.body;
+    const data = initData();
+    if (!data.keys[key]) return res.json({ success: false, message: 'Key không tồn tại!' });
+    data.keys[key].active = true;
+    data.logs[key] = data.logs[key] || [];
+    data.logs[key].push({ timestamp: new Date().toISOString(), action: 'KEY_ENABLED', status: 'SUCCESS', ip: req.clientIp });
+    saveData(data);
+    res.json({ success: true, message: `Đã kích hoạt lại key: ${key}` });
 });
 
 app.post('/api/admin/delete-key', verifyAdmin, (req, res) => {
@@ -278,15 +410,26 @@ app.post('/api/admin/delete-key', verifyAdmin, (req, res) => {
     const data = initData();
     if (!data.keys[key]) return res.json({ success: false, message: 'Key không tồn tại!' });
     delete data.keys[key];
-    data.logs.push({ timestamp: new Date().toISOString(), key, action: 'KEY_DELETED', status: 'SUCCESS', ip: req.clientIp });
+    delete data.logs[key];
     saveData(data);
     res.json({ success: true, message: `Đã xóa key: ${key}` });
 });
 
 app.get('/api/admin/logs', verifyAdmin, (req, res) => {
-    const { limit = 50 } = req.query;
+    const { key, limit = 50 } = req.query;
     const data = initData();
-    res.json({ success: true, total: data.logs.length, logs: data.logs.slice(-parseInt(limit)).reverse() });
+    let logs = [];
+    if (key && data.logs[key]) {
+        logs = data.logs[key];
+    } else {
+        Object.keys(data.logs).forEach(k => {
+            data.logs[k].forEach(log => {
+                logs.push({ ...log, key: k });
+            });
+        });
+    }
+    logs = logs.slice(-parseInt(limit)).reverse();
+    res.json({ success: true, total: logs.length, logs });
 });
 
 app.get('/api/admin/sessions', verifyAdmin, (req, res) => {
@@ -312,8 +455,6 @@ app.post('/api/admin/disconnect', verifyAdmin, (req, res) => {
         const tokens = Object.keys(data.sessions);
         tokens.forEach(t => { delete data.sessions[t]; disconnected.push(t.substring(0, 16) + '...'); });
     }
-    data.logs.push({ timestamp: new Date().toISOString(), key: key || 'ALL', action: 'DISCONNECT', status: 'SUCCESS', ip: req.clientIp });
-    saveData(data);
     res.json({ success: true, message: `Đã ngắt ${disconnected.length} session(s)`, disconnected });
 });
 
@@ -325,5 +466,6 @@ app.listen(PORT, () => {
     console.log(`✅ Server đang chạy tại port ${PORT}`);
     console.log(`🔑 Admin Key: ${ADMIN_KEY}`);
     console.log(`📁 Dữ liệu: ${DATA_FILE}`);
-    console.log(`🔐 RSA Public Key đã tạo!`);
+    console.log(`🔐 RSA Key đã tạo!`);
+    console.log(`📌 API cũ /verify-key và /use-key đã được thêm!`);
 });
