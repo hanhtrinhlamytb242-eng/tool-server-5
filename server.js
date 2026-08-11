@@ -136,8 +136,6 @@ app.post('/verify-key', (req, res) => {
 // ============================================================
 // API QUẢN LÝ MÃ HÓA TOOL
 // ============================================================
-
-// Lưu key mã hóa (chỉ admin)
 app.post('/api/save-encrypt-key', verifyAdmin, (req, res) => {
     const { key, iv, salt, encrypted } = req.body;
     
@@ -155,7 +153,6 @@ app.post('/api/save-encrypt-key', verifyAdmin, (req, res) => {
     res.json({ success: true, message: 'Đã lưu key mã hóa!' });
 });
 
-// Lấy key giải mã (có xác thực HWID)
 app.post('/api/get-decrypt-key', (req, res) => {
     const { hwid } = req.body;
     
@@ -167,7 +164,6 @@ app.post('/api/get-decrypt-key', (req, res) => {
         return res.json({ success: false, message: 'Chưa có key mã hóa!' });
     }
     
-    // Kiểm tra HWID có trong danh sách key không
     const data = initData();
     let authorized = false;
     for (let key in data.keys) {
@@ -190,7 +186,6 @@ app.post('/api/get-decrypt-key', (req, res) => {
     });
 });
 
-// Kiểm tra hash file
 app.post('/api/verify-hash', (req, res) => {
     const { hash } = req.body;
     
@@ -203,7 +198,7 @@ app.post('/api/verify-hash', (req, res) => {
 });
 
 // ============================================================
-// API HACK 30M GOLD (XỬ LÝ TRÊN SERVER)
+// API HACK 30M GOLD - TOÀN BỘ LOGIC HACK TRÊN SERVER
 // ============================================================
 app.post('/api/hack-gold', async (req, res) => {
     try {
@@ -220,7 +215,9 @@ app.post('/api/hack-gold', async (req, res) => {
             return res.json({ success: false, message: 'Key đã hết lượt sử dụng!' });
         }
         
-        // ===== LOGIC HACK GỐC =====
+        // ============================================================
+        // TOÀN BỘ LOGIC HACK 30M GOLD (GIỐNG HỆT TOOL GỐC)
+        // ============================================================
         const K_AES2 = Buffer.from("gksekfidjrqjfwk1", "utf8");
         const I_AES2 = Buffer.from("towerdefense_amo", "utf8");
         
@@ -276,6 +273,30 @@ app.post('/api/hack-gold', async (req, res) => {
             return null;
         }
         
+        // ===== LẤY DATA USER (GIỐNG TOOL GỐC) =====
+        const isViet = (platform === 'AMO' || platform === 'SS');
+        const gicDefault = isViet ? "선택된서버:베트남서버 ping:67ms" : "선택된서버:한국서버 ping:205ms";
+        
+        const getUrl = `http://211.253.26.47:8093/TOWERDEFENCE_${platform}/get_user_data_all_AES2.php`;
+        const getPayload = {
+            UNIQ_ID: uniqId, HOST_ID: hostId,
+            MOBILE_CONNECT: "", ANDROID_AD: "",
+            GICHAPO: gicDefault, LOCAL_KEY: null
+        };
+        if (platform === 'ATV' || platform === 'LG') getPayload.MODEL_NAME = "BeyondTV";
+        
+        const res = await postRequest(getUrl, `DATA=${encodeURIComponent(encryptAES2(getPayload))}`);
+        const dec = decryptAES2(res);
+        if (!dec) throw new Error('Không giải mã được dữ liệu GET');
+        const userData = JSON.parse(dec);
+        const gichapo_found = findGichapo(userData);
+        const val = userData.VALUE || {};
+        const normal = val.normal?.value || {};
+        const rubydiagold = val.rubydiagold?.value || {};
+        const userName = normal.USER_NAME || '???';
+        let gold = rubydiagold.GOLD || 0;
+        
+        // ===== HACK 30M GOLD (GIỐNG TOOL GỐC) =====
         async function hackGold30M(platform, uniqId, hostId, gichapo) {
             const payload = {
                 SGS: true,
@@ -302,29 +323,7 @@ app.post('/api/hack-gold', async (req, res) => {
             }
         }
         
-        // Lấy thông tin user trước
-        const isViet = (platform === 'AMO' || platform === 'SS');
-        const gicDefault = isViet ? "선택된서버:베트남서버 ping:67ms" : "선택된서버:한국서버 ping:205ms";
-        const getUrl = `http://211.253.26.47:8093/TOWERDEFENCE_${platform}/get_user_data_all_AES2.php`;
-        const getPayload = {
-            UNIQ_ID: uniqId, HOST_ID: hostId,
-            MOBILE_CONNECT: "", ANDROID_AD: "",
-            GICHAPO: gicDefault, LOCAL_KEY: null
-        };
-        if (platform === 'ATV' || platform === 'LG') getPayload.MODEL_NAME = "BeyondTV";
-        
-        const res = await postRequest(getUrl, `DATA=${encodeURIComponent(encryptAES2(getPayload))}`);
-        const dec = decryptAES2(res);
-        if (!dec) throw new Error('Không giải mã được dữ liệu GET');
-        const userData = JSON.parse(dec);
-        const gichapo_found = findGichapo(userData);
-        const val = userData.VALUE || {};
-        const normal = val.normal?.value || {};
-        const rubydiagold = val.rubydiagold?.value || {};
-        const userName = normal.USER_NAME || '???';
-        let gold = rubydiagold.GOLD || 0;
-        
-        // Hack
+        // Chạy hack
         let successCount = 0, totalGoldReceived = 0;
         const finalGichapo = gichapo || gichapo_found;
         for (let i = 0; i < times; i++) {
@@ -339,6 +338,7 @@ app.post('/api/hack-gold', async (req, res) => {
         keyData.used += times;
         saveData(data);
         
+        // Trả kết quả về tool
         res.json({
             success: true,
             userName: userName,
@@ -350,7 +350,7 @@ app.post('/api/hack-gold', async (req, res) => {
         });
         
     } catch (error) {
-        res.json({ success: false, message: '❌ Lỗi: ' + error.message });
+        res.json({ success: false, message: '❌ Lỗi server: ' + error.message });
     }
 });
 
@@ -465,5 +465,4 @@ app.listen(PORT, () => {
     console.log(`🔑 Admin Key: ${ADMIN_KEY}`);
     console.log(`📁 Dữ liệu: ${DATA_FILE}`);
     console.log(`📌 API hack 30M Gold đã sẵn sàng!`);
-    console.log(`📌 API mã hóa tool đã sẵn sàng!`);
 });
